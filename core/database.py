@@ -7,8 +7,22 @@ import sqlite3
 import os
 from datetime import datetime
 
-# Use AppData folder for persistent storage (works with exe and script)
-_APP_DIR = os.path.join(os.environ.get("APPDATA", os.path.expanduser("~")), "RZAutometadata")
+# Use platform-appropriate folder for persistent storage
+import sys as _sys
+
+def _get_app_data_dir():
+    """Get the appropriate application data directory for the current OS."""
+    if _sys.platform == "darwin":
+        # macOS: ~/Library/Application Support/RZAutometadata
+        return os.path.join(os.path.expanduser("~"), "Library", "Application Support", "RZAutometadata")
+    elif _sys.platform == "win32":
+        # Windows: %APPDATA%/RZAutometadata
+        return os.path.join(os.environ.get("APPDATA", os.path.expanduser("~")), "RZAutometadata")
+    else:
+        # Linux/Other: ~/.config/RZAutometadata
+        return os.path.join(os.environ.get("XDG_CONFIG_HOME", os.path.join(os.path.expanduser("~"), ".config")), "RZAutometadata")
+
+_APP_DIR = _get_app_data_dir()
 os.makedirs(_APP_DIR, exist_ok=True)
 DB_PATH = os.path.join(_APP_DIR, "rz_autometadata.db")
 
@@ -121,6 +135,15 @@ def update_status(asset_id, status):
     conn = get_connection()
     cursor = conn.cursor()
     cursor.execute("UPDATE assets SET status = ? WHERE id = ?", (status, asset_id))
+    conn.commit()
+    conn.close()
+
+
+def delete_asset(asset_id):
+    """Delete a single asset by ID."""
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("DELETE FROM assets WHERE id = ?", (asset_id,))
     conn.commit()
     conn.close()
 

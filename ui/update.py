@@ -67,7 +67,7 @@ class UpdateMixin:
         # Version info
         ctk.CTkLabel(
             card, text=f"v{CURRENT_VERSION}  →  v{info['version']}",
-            font=ctk.CTkFont(family="Consolas", size=15, weight="bold"),
+            font=ctk.CTkFont(family="Menlo" if __import__('sys').platform == "darwin" else "Consolas", size=15, weight="bold"),
             text_color=COLORS["success"]
         ).pack(pady=(0, 8))
 

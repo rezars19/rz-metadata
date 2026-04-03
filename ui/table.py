@@ -12,6 +12,7 @@ import customtkinter as ctk
 from PIL import ImageTk, Image as PILImage
 from concurrent.futures import ThreadPoolExecutor
 import os
+import sys
 
 from ui.theme import COLORS, PREVIEW_SIZE, compress_preview
 from core.ai_providers import ADOBE_STOCK_CATEGORIES
@@ -20,6 +21,8 @@ from core.metadata_processor import load_preview_image, get_file_type
 _MAX_THUMBS = 300          # max thumbnail images kept in memory
 _THUMB_WORKERS = 3         # background threads for thumbnail generation
 _LOAD_DEBOUNCE_MS = 80     # debounce delay before loading thumbnails
+_FONT_FAMILY = "Helvetica Neue" if sys.platform == "darwin" else "Segoe UI"
+_MONO_FONT = "Menlo" if sys.platform == "darwin" else "Consolas"
 
 
 class TableMixin:
@@ -61,7 +64,7 @@ class TableMixin:
             bordercolor=_grid,
             rowheight=52,
             indent=0,
-            font=("Segoe UI", 11),
+            font=(_FONT_FAMILY, 11),
         )
         style.map("Asset.Treeview",
             background=[("selected", COLORS["accent_blue"])],
@@ -74,7 +77,7 @@ class TableMixin:
             foreground=COLORS["neon_blue"],
             borderwidth=1,
             bordercolor=_grid,
-            font=("Segoe UI", 11, "bold"),
+            font=(_FONT_FAMILY, 11, "bold"),
             relief="groove",
             padding=(8, 8),
         )
@@ -167,6 +170,27 @@ class TableMixin:
 
         # Backward compat
         self.col_config = col_ids
+
+        # ── Right-click context menu ───────────────────────────────────
+        self._tree_context_menu = tk.Menu(
+            self.tree, tearoff=0,
+            bg=COLORS["bg_card"], fg=COLORS["text_primary"],
+            activebackground=COLORS["accent_blue"], activeforeground="white",
+            font=(_FONT_FAMILY, 11), relief="flat", bd=1,
+        )
+        self._tree_context_menu.add_command(
+            label="🚀  Generate Metadata", command=self._ctx_generate_single
+        )
+        self._tree_context_menu.add_separator()
+        self._tree_context_menu.add_command(
+            label="🗑  Delete Asset", command=self._ctx_delete_single
+        )
+        self.tree.bind("<Button-3>", self._on_tree_right_click)
+        # macOS: right-click is Button-2 or Control-Click
+        if sys.platform == "darwin":
+            self.tree.bind("<Button-2>", self._on_tree_right_click)
+            self.tree.bind("<Control-Button-1>", self._on_tree_right_click)
+        self._ctx_target_asset_id = None
 
     def _configure_tree_columns(self):
         """Set column definitions based on the current platform."""
@@ -353,7 +377,7 @@ class TableMixin:
 
         if col_name in self._multiline_cols:
             edit = tk.Text(
-                self.tree, wrap="word", font=("Segoe UI", 11),
+                self.tree, wrap="word", font=(_FONT_FAMILY, 11),
                 bg=COLORS["bg_input"], fg=COLORS["text_primary"],
                 insertbackground=COLORS["neon_blue"],
                 selectbackground=COLORS["accent_blue"], selectforeground="white",
@@ -369,7 +393,7 @@ class TableMixin:
                       self._finish_edit(a, c, edit, True))
         else:
             edit = tk.Entry(
-                self.tree, font=("Segoe UI", 11),
+                self.tree, font=(_FONT_FAMILY, 11),
                 bg=COLORS["bg_input"], fg=COLORS["text_primary"],
                 insertbackground=COLORS["neon_blue"],
                 selectbackground=COLORS["accent_blue"], selectforeground="white",
@@ -635,6 +659,94 @@ class TableMixin:
                 except Exception:
                     pass
 
+    # ─── RIGHT-CLICK CONTEXT MENU ─────────────────────────────────────────────────
+
+    def _on_tree_right_click(self, event):
+        """Show context menu on right-click over a row."""
+        item_id = self.tree.identify_row(event.y)
+        if not item_id:
+            return
+
+        # Select the clicked row visually
+        self.tree.selection_set(item_id)
+
+        asset_id = self._item_to_asset.get(item_id)
+        if asset_id is None:
+            return
+
+        self._ctx_target_asset_id = asset_id
+
+        # Enable/disable Generate based on current state
+        card = self.asset_cards.get(asset_id, {})
+        has_metadata = bool(card.get("title", "").strip() or card.get("keywords", "").strip())
+
+        # Update Generate label: "Re-generate" if already has metadata
+        gen_label = "🔄  Re-generate Metadata" if has_metadata else "🚀  Generate Metadata"
+        self._tree_context_menu.entryconfigure(0, label=gen_label)
+
+        # Disable Generate if currently generating
+        gen_state = "disabled" if self.is_generating else "normal"
+        self._tree_context_menu.entryconfigure(0, state=gen_state)
+
+        # Disable Delete if currently generating
+        del_state = "disabled" if self.is_generating else "normal"
+        self._tree_context_menu.entryconfigure(2, state=del_state)
+
+        try:
+            self._tree_context_menu.tk_popup(event.x_root, event.y_root)
+        finally:
+            self._tree_context_menu.grab_release()
+
+    def _ctx_generate_single(self):
+        """Dispatch: generate metadata for the right-clicked asset."""
+        if self._ctx_target_asset_id is not None:
+            self._generate_single_asset(self._ctx_target_asset_id)
+
+    def _ctx_delete_single(self):
+        """Dispatch: delete the right-clicked asset."""
+        if self._ctx_target_asset_id is not None:
+            self._delete_single_asset(self._ctx_target_asset_id)
+
+    # ─── DELETE SINGLE ASSET ──────────────────────────────────────────────────────
+
+    def _delete_single_asset(self, asset_id):
+        """Remove a single asset from the table, memory, and database."""
+        import core.database as _db
+
+        card = self.asset_cards.get(asset_id)
+        if not card:
+            return
+
+        filename = card.get("filename", "")
+        item_id = card["tree_item"]
+
+        # Remove from Treeview
+        try:
+            if self.tree.exists(item_id):
+                self.tree.delete(item_id)
+        except Exception:
+            pass
+
+        # Remove from internal state
+        self._item_to_asset.pop(item_id, None)
+        self.asset_cards.pop(asset_id, None)
+        self.preview_images.pop(asset_id, None)
+        self._thumb_loaded.discard(asset_id)
+        self._thumb_pending.discard(asset_id)
+
+        # Remove from database
+        _db.delete_asset(asset_id)
+
+        # Update counter / CSV button
+        self._update_counter()
+        self._update_csv_button_state()
+
+        # Show empty state if no assets left
+        if not self.asset_cards:
+            self.empty_label.place(relx=0.5, rely=0.5, anchor="center")
+
+        self._log(f"🗑 Deleted: {filename}")
+
     # ─── CLEAR TREE ──────────────────────────────────────────────────────────────
 
     def _clear_tree(self):
@@ -708,7 +820,7 @@ class TableMixin:
 
         self.log_text = ctk.CTkTextbox(
             self.log_container, fg_color=COLORS["bg_darkest"], text_color=COLORS["text_primary"],
-            font=ctk.CTkFont(family="Consolas", size=11),
+            font=ctk.CTkFont(family=_MONO_FONT, size=11),
             border_width=0, scrollbar_button_color=COLORS["accent_blue"], wrap="word"
         )
         self.log_text.grid(row=1, column=0, sticky="nsew", padx=3, pady=3)

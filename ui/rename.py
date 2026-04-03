@@ -8,6 +8,7 @@ Mixed into the main RZAutomedata class.
 import customtkinter as ctk
 from tkinter import filedialog, messagebox, ttk
 import os
+import sys
 import threading
 
 from ui.theme import COLORS
@@ -56,7 +57,7 @@ class RenameMixin:
 
         # ── Title ──
         ctk.CTkLabel(
-            scroll, text="✏️  Bulk Rename",
+            scroll, text="📝  Bulk Rename",
             font=ctk.CTkFont(size=18, weight="bold"),
             text_color=COLORS["neon_blue"]
         ).pack(padx=16, pady=(16, 4), anchor="w")
@@ -218,20 +219,21 @@ class RenameMixin:
 
         # Treeview style
         style = ttk.Style()
+        _font_family = "Helvetica Neue" if sys.platform == "darwin" else "Segoe UI"
         style.configure(
             "Rename.Treeview",
             background=COLORS["bg_card"],
             foreground=COLORS["text_primary"],
             fieldbackground=COLORS["bg_card"],
             borderwidth=0,
-            font=("Segoe UI", 11),
+            font=(_font_family, 11),
             rowheight=32
         )
         style.configure(
             "Rename.Treeview.Heading",
             background=COLORS["table_header"],
             foreground=COLORS["neon_blue"],
-            font=("Segoe UI", 11, "bold"),
+            font=(_font_family, 11, "bold"),
             borderwidth=0
         )
         style.map("Rename.Treeview",
@@ -280,8 +282,8 @@ class RenameMixin:
     def _rename_browse_files(self):
         """Open file dialog to select files for renaming."""
         filetypes = [
-            ("All Supported", "*.jpg *.jpeg *.png *.eps *.svg *.mp4 *.mov"),
-            ("Images", "*.jpg *.jpeg *.png"),
+            ("All Supported", "*.jpg *.jpeg *.png *.psd *.eps *.svg *.mp4 *.mov"),
+            ("Images", "*.jpg *.jpeg *.png *.psd"),
             ("Vectors", "*.eps *.svg"),
             ("Videos", "*.mp4 *.mov"),
             ("All Files", "*.*")

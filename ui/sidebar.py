@@ -136,7 +136,7 @@ class SidebarMixin:
             font=ctk.CTkFont(size=12, weight="bold"), text_color=COLORS["text_primary"]
         ).pack()
         ctk.CTkLabel(
-            drop_inner, text="JPG, PNG, EPS, SVG, MP4, MOV",
+            drop_inner, text="JPG, PNG, PSD, EPS, SVG, MP4, MOV",
             font=ctk.CTkFont(size=9), text_color=COLORS["text_muted"]
         ).pack()
 
@@ -286,6 +286,14 @@ class SidebarMixin:
             self._update_csv_button_state()
             self.progress_label.configure(text="")
 
+        # Save current platform's range settings before switching
+        import core.database as _db
+        old_p = self.current_platform
+        _db.save_setting(f"title_min_{old_p}", str(self.title_min_var.get()))
+        _db.save_setting(f"title_max_{old_p}", str(self.title_max_var.get()))
+        _db.save_setting(f"kw_min_{old_p}", str(self.kw_min_var.get()))
+        _db.save_setting(f"kw_max_{old_p}", str(self.kw_max_var.get()))
+
         self.current_platform = platform
 
         # Hide all platform-specific frames first
@@ -315,6 +323,19 @@ class SidebarMixin:
         # Rebuild the table with new column headers
         self.table_container.destroy()
         self._build_asset_table(self.right_frame)
+
+        # Load saved range settings for the NEW platform (or defaults if never saved)
+        platform_defaults = {
+            "adobestock": (70, 120, 30, 40),
+            "shutterstock": (120, 200, 30, 40),
+            "freepik": (70, 100, 30, 40),
+            "vecteezy": (150, 200, 30, 40)
+        }
+        defs = platform_defaults.get(platform, (70, 120, 30, 40))
+        self.title_min_var.set(_db.get_setting(f"title_min_{platform}", str(defs[0])))
+        self.title_max_var.set(_db.get_setting(f"title_max_{platform}", str(defs[1])))
+        self.kw_min_var.set(_db.get_setting(f"kw_min_{platform}", str(defs[2])))
+        self.kw_max_var.set(_db.get_setting(f"kw_max_{platform}", str(defs[3])))
 
         self._log(f"🎯 Platform switched to {display_name}")
 
@@ -368,7 +389,7 @@ class SidebarMixin:
         """Open a popup dialog for AI Provider Settings."""
         popup = ctk.CTkToplevel(self)
         popup.title("⚙️ AI Provider Settings")
-        popup.geometry("420x440")
+        popup.geometry("420x620")
         popup.resizable(False, False)
         popup.configure(fg_color=COLORS["bg_dark"])
         popup.transient(self)
@@ -377,7 +398,7 @@ class SidebarMixin:
         # Center popup on main window
         self.update_idletasks()
         x = self.winfo_x() + (self.winfo_width() - 420) // 2
-        y = self.winfo_y() + (self.winfo_height() - 440) // 2
+        y = self.winfo_y() + (self.winfo_height() - 620) // 2
         popup.geometry(f"+{x}+{y}")
 
         # Title
@@ -446,6 +467,64 @@ class SidebarMixin:
             border_color=COLORS["border"], height=22
         ).pack(padx=16, pady=(0, 12), anchor="w")
 
+        # ── Title & Keyword Range Settings ──────────────────────────────
+        range_frame = ctk.CTkFrame(popup, fg_color=COLORS["bg_card"], corner_radius=12,
+                                    border_width=1, border_color=COLORS["border"])
+        range_frame.pack(padx=24, pady=(0, 16), fill="x")
+
+        ctk.CTkLabel(
+            range_frame, text="📏  Metadata Range Settings",
+            font=ctk.CTkFont(size=13, weight="bold"), text_color=COLORS["neon_blue"]
+        ).pack(padx=16, pady=(12, 8))
+
+        # Title range row
+        title_row = ctk.CTkFrame(range_frame, fg_color="transparent")
+        title_row.pack(padx=16, pady=(0, 6), fill="x")
+        ctk.CTkLabel(title_row, text="Title:", font=ctk.CTkFont(size=11),
+                     text_color=COLORS["text_secondary"], width=60).pack(side="left")
+        ctk.CTkLabel(title_row, text="Min", font=ctk.CTkFont(size=10),
+                     text_color=COLORS["text_muted"]).pack(side="left", padx=(4, 2))
+        ctk.CTkEntry(
+            title_row, textvariable=self.title_min_var, width=55, height=28,
+            fg_color=COLORS["bg_input"], border_color=COLORS["border"],
+            text_color=COLORS["text_primary"], font=ctk.CTkFont(size=12),
+            justify="center"
+        ).pack(side="left", padx=(0, 6))
+        ctk.CTkLabel(title_row, text="Max", font=ctk.CTkFont(size=10),
+                     text_color=COLORS["text_muted"]).pack(side="left", padx=(4, 2))
+        ctk.CTkEntry(
+            title_row, textvariable=self.title_max_var, width=55, height=28,
+            fg_color=COLORS["bg_input"], border_color=COLORS["border"],
+            text_color=COLORS["text_primary"], font=ctk.CTkFont(size=12),
+            justify="center"
+        ).pack(side="left", padx=(0, 4))
+        ctk.CTkLabel(title_row, text="chars", font=ctk.CTkFont(size=9),
+                     text_color=COLORS["text_muted"]).pack(side="left")
+
+        # Keyword range row
+        kw_row = ctk.CTkFrame(range_frame, fg_color="transparent")
+        kw_row.pack(padx=16, pady=(0, 12), fill="x")
+        ctk.CTkLabel(kw_row, text="Keywords:", font=ctk.CTkFont(size=11),
+                     text_color=COLORS["text_secondary"], width=60).pack(side="left")
+        ctk.CTkLabel(kw_row, text="Min", font=ctk.CTkFont(size=10),
+                     text_color=COLORS["text_muted"]).pack(side="left", padx=(4, 2))
+        ctk.CTkEntry(
+            kw_row, textvariable=self.kw_min_var, width=55, height=28,
+            fg_color=COLORS["bg_input"], border_color=COLORS["border"],
+            text_color=COLORS["text_primary"], font=ctk.CTkFont(size=12),
+            justify="center"
+        ).pack(side="left", padx=(0, 6))
+        ctk.CTkLabel(kw_row, text="Max", font=ctk.CTkFont(size=10),
+                     text_color=COLORS["text_muted"]).pack(side="left", padx=(4, 2))
+        ctk.CTkEntry(
+            kw_row, textvariable=self.kw_max_var, width=55, height=28,
+            fg_color=COLORS["bg_input"], border_color=COLORS["border"],
+            text_color=COLORS["text_primary"], font=ctk.CTkFont(size=12),
+            justify="center"
+        ).pack(side="left", padx=(0, 4))
+        ctk.CTkLabel(kw_row, text="count", font=ctk.CTkFont(size=9),
+                     text_color=COLORS["text_muted"]).pack(side="left")
+
         # Provider change handler for popup
         def on_popup_provider_change(name):
             self._on_provider_changed(name, popup_model_dropdown=popup_model, popup_api_entry=popup_api)
@@ -497,8 +576,8 @@ class SidebarMixin:
 
     def _browse_files(self):
         filetypes = [
-            ("All Supported", "*.jpg *.jpeg *.png *.eps *.svg *.mp4 *.mov"),
-            ("Images", "*.jpg *.jpeg *.png"),
+            ("All Supported", "*.jpg *.jpeg *.png *.psd *.eps *.svg *.mp4 *.mov"),
+            ("Images", "*.jpg *.jpeg *.png *.psd"),
             ("Vectors", "*.eps *.svg"),
             ("Videos", "*.mp4 *.mov"),
         ]

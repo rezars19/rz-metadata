@@ -6,9 +6,13 @@ Mixed into the main RZAutometadata class.
 """
 
 import customtkinter as ctk
+import sys
 
 from ui.theme import COLORS
 from core.auto_updater import CURRENT_VERSION
+
+# Cross-platform font family
+_FONT_FAMILY = "Helvetica Neue" if sys.platform == "darwin" else "Segoe UI"
 
 
 class HeaderMixin:
@@ -28,13 +32,13 @@ class HeaderMixin:
 
         ctk.CTkLabel(
             title_box, text="⚡ RZ Autometadata",
-            font=ctk.CTkFont(family="Segoe UI", size=24, weight="bold"),
+            font=ctk.CTkFont(family=_FONT_FAMILY, size=24, weight="bold"),
             text_color=COLORS["neon_blue"]
         ).pack(side="left")
 
         ctk.CTkLabel(
             title_box, text="  |  Metadata & Rename Tools",
-            font=ctk.CTkFont(family="Segoe UI", size=13),
+            font=ctk.CTkFont(family=_FONT_FAMILY, size=13),
             text_color=COLORS["text_secondary"]
         ).pack(side="left", padx=(8, 0))
 

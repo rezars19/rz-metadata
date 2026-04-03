@@ -10,35 +10,82 @@ from core.video_utils import extract_frames
 from core.ai_providers import generate_metadata
 import core.database as db
 
+import sys as _sys
+import shutil
+
+# ── Cross-platform font finder ────────────────────────────────────────────────
+def _find_system_font(size=16):
+    """Find a suitable system font across platforms."""
+    from PIL import ImageFont
+    # Try common fonts by platform
+    if _sys.platform == "darwin":
+        font_candidates = [
+            "/System/Library/Fonts/Helvetica.ttc",
+            "/System/Library/Fonts/SFNSText.ttf",
+            "/Library/Fonts/Arial.ttf",
+            "/System/Library/Fonts/Supplemental/Arial.ttf",
+        ]
+    elif _sys.platform == "win32":
+        font_candidates = [
+            "arial.ttf",
+            "segoeui.ttf",
+            "calibri.ttf",
+        ]
+    else:
+        font_candidates = [
+            "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+            "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
+            "/usr/share/fonts/TTF/DejaVuSans.ttf",
+        ]
+    for font_path in font_candidates:
+        try:
+            return ImageFont.truetype(font_path, size)
+        except Exception:
+            continue
+    return ImageFont.load_default()
+
+
 # ── Auto-detect Ghostscript for EPS support ──────────────────────────────────
 def _setup_ghostscript():
-    """Find and register Ghostscript with Pillow on Windows."""
+    """Find and register Ghostscript with Pillow (cross-platform)."""
     try:
         from PIL import EpsImagePlugin
-        # Check if already available
-        if EpsImagePlugin.gs_windows_binary:
-            return
 
-        # Common Ghostscript install locations on Windows
-        gs_paths = glob.glob(r"C:\Program Files\gs\gs*\bin\gswin64c.exe")
-        gs_paths += glob.glob(r"C:\Program Files (x86)\gs\gs*\bin\gswin32c.exe")
-        gs_paths += glob.glob(os.path.expanduser(r"~\gs\gs*\bin\gswin64c.exe"))
-
-        if gs_paths:
-            gs_binary = gs_paths[0]
-            gs_dir = os.path.dirname(gs_binary)
-            # Add to PATH
-            if gs_dir not in os.environ.get("PATH", ""):
-                os.environ["PATH"] = gs_dir + os.pathsep + os.environ.get("PATH", "")
-            # Register with Pillow
-            EpsImagePlugin.gs_windows_binary = gs_binary
+        if _sys.platform == "win32":
+            # Windows: check if already set
+            if EpsImagePlugin.gs_windows_binary:
+                return
+            # Common Ghostscript install locations on Windows
+            gs_paths = glob.glob(r"C:\Program Files\gs\gs*\bin\gswin64c.exe")
+            gs_paths += glob.glob(r"C:\Program Files (x86)\gs\gs*\bin\gswin32c.exe")
+            gs_paths += glob.glob(os.path.expanduser(r"~\gs\gs*\bin\gswin64c.exe"))
+            if gs_paths:
+                gs_binary = gs_paths[0]
+                gs_dir = os.path.dirname(gs_binary)
+                if gs_dir not in os.environ.get("PATH", ""):
+                    os.environ["PATH"] = gs_dir + os.pathsep + os.environ.get("PATH", "")
+                EpsImagePlugin.gs_windows_binary = gs_binary
+        else:
+            # macOS / Linux: check if 'gs' is in PATH
+            gs_bin = shutil.which("gs")
+            if gs_bin:
+                gs_dir = os.path.dirname(gs_bin)
+                if gs_dir not in os.environ.get("PATH", ""):
+                    os.environ["PATH"] = gs_dir + os.pathsep + os.environ.get("PATH", "")
+            else:
+                # macOS Homebrew common paths
+                for candidate in ["/opt/homebrew/bin/gs", "/usr/local/bin/gs"]:
+                    if os.path.isfile(candidate):
+                        gs_dir = os.path.dirname(candidate)
+                        os.environ["PATH"] = gs_dir + os.pathsep + os.environ.get("PATH", "")
+                        break
     except Exception:
         pass
 
 _setup_ghostscript()
 
 # Supported file extensions
-IMAGE_EXTENSIONS = {'.jpg', '.jpeg', '.png'}
+IMAGE_EXTENSIONS = {'.jpg', '.jpeg', '.png', '.psd'}
 VECTOR_EXTENSIONS = {'.eps', '.svg'}
 VIDEO_EXTENSIONS = {'.mp4', '.mov'}
 ALL_EXTENSIONS = IMAGE_EXTENSIONS | VECTOR_EXTENSIONS | VIDEO_EXTENSIONS
@@ -64,6 +111,12 @@ def load_preview_image(file_path, file_type, size=(200, 150)):
         PIL.Image object
     """
     if file_type == "image":
+        ext = os.path.splitext(file_path)[1].lower()
+        if ext == '.psd':
+            img = _try_load_psd(file_path, size)
+            if img:
+                return img
+            return _create_placeholder(file_path, size, "PSD")
         img = Image.open(file_path)
         img.thumbnail(size, Image.LANCZOS)
         return img
@@ -232,6 +285,48 @@ def _try_render_eps(file_path, size):
     return None
 
 
+def _try_load_psd(file_path, size):
+    """
+    Try to load a PSD file as a composited image.
+    
+    Method 1: psd-tools (full layer compositing)
+    Method 2: Pillow fallback (reads flattened preview if available)
+    """
+    # Method 1: psd-tools — composites all visible layers accurately
+    try:
+        from psd_tools import PSDImage
+        psd = PSDImage.open(file_path)
+        img = psd.composite()
+        if img:
+            img.thumbnail(size, Image.LANCZOS)
+            if img.mode not in ("RGB", "RGBA"):
+                img = img.convert("RGB")
+            if img.mode == "RGBA":
+                bg = Image.new("RGB", img.size, (255, 255, 255))
+                bg.paste(img, mask=img.split()[3])
+                img = bg
+            return img
+    except Exception:
+        pass
+
+    # Method 2: Pillow fallback — reads the flattened composite from PSD
+    try:
+        img = Image.open(file_path)
+        img.load()
+        img.thumbnail(size, Image.LANCZOS)
+        if img.mode not in ("RGB", "RGBA"):
+            img = img.convert("RGB")
+        if img.mode == "RGBA":
+            bg = Image.new("RGB", img.size, (255, 255, 255))
+            bg.paste(img, mask=img.split()[3])
+            img = bg
+        return img
+    except Exception:
+        pass
+
+    return None
+
+
 def _create_vector_placeholder(file_path, size, label):
     """Create a styled placeholder for vector files (SVG/EPS) that can't be rendered."""
     from PIL import ImageDraw, ImageFont
@@ -250,11 +345,8 @@ def _create_vector_placeholder(file_path, size, label):
     draw.rectangle([(0, 0), (size[0]-1, size[1]-1)], outline=scheme["accent"], width=1)
 
     # Draw label centered
-    try:
-        font_size = max(8, min(size[1] // 3, 16))
-        font = ImageFont.truetype("arial.ttf", font_size)
-    except Exception:
-        font = ImageFont.load_default()
+    font_size = max(8, min(size[1] // 3, 16))
+    font = _find_system_font(font_size)
 
     text = f".{label}"
     bbox = draw.textbbox((0, 0), text, font=font)
@@ -274,10 +366,7 @@ def _create_placeholder(file_path, size, label):
     draw = ImageDraw.Draw(img)
     ext = os.path.splitext(file_path)[1].upper()
     text = f"{label}\n{ext}"
-    try:
-        font = ImageFont.truetype("arial.ttf", 16)
-    except:
-        font = ImageFont.load_default()
+    font = _find_system_font(16)
     bbox = draw.textbbox((0, 0), text, font=font)
     text_w = bbox[2] - bbox[0]
     text_h = bbox[3] - bbox[1]
@@ -292,14 +381,15 @@ def load_images_for_ai(file_path, file_type):
     Load image(s) for AI analysis.
     
     For images: returns list with one image
+    For PSD: composites all layers, returns one image
     For vectors: tries to rasterize SVG/EPS, falls back to descriptive placeholder
-    For videos: returns list of 5 frames
+    For videos: returns 1 frame per second (max 15)
     
     Returns:
         List of PIL.Image objects
     """
     if file_type == "video":
-        frames = extract_frames(file_path, num_frames=5)
+        frames = extract_frames(file_path)
         # Resize frames for API (max 1024px on longest side)
         resized = []
         for f in frames:
@@ -309,6 +399,12 @@ def load_images_for_ai(file_path, file_type):
     elif file_type == "vector":
         return _load_vector_for_ai(file_path)
     else:
+        ext = os.path.splitext(file_path)[1].lower()
+        if ext == '.psd':
+            img = _try_load_psd(file_path, (1024, 1024))
+            if img:
+                return [img]
+            # Fallback to Pillow (may only read first layer)
         img = Image.open(file_path)
         img.thumbnail((1024, 1024), Image.LANCZOS)
         if img.mode != "RGB":
@@ -522,14 +618,9 @@ def _create_ai_vector_fallback(file_path, format_type):
     img = Image.new('RGB', (800, 600), color=(255, 255, 255))
     draw = ImageDraw.Draw(img)
 
-    try:
-        font_title = ImageFont.truetype("arial.ttf", 24)
-        font_body = ImageFont.truetype("arial.ttf", 16)
-        font_small = ImageFont.truetype("arial.ttf", 12)
-    except Exception:
-        font_title = ImageFont.load_default()
-        font_body = font_title
-        font_small = font_title
+    font_title = _find_system_font(24)
+    font_body = _find_system_font(16)
+    font_small = _find_system_font(12)
 
     filename = os.path.basename(file_path)
     y = 30
@@ -650,7 +741,7 @@ def _create_ai_vector_fallback(file_path, format_type):
     return img
 
 
-def process_single_asset(asset, provider_name, model, api_key, on_log=None, custom_prompt="", platform="adobestock", ai_generated=False):
+def process_single_asset(asset, provider_name, model, api_key, on_log=None, custom_prompt="", platform="adobestock", ai_generated=False, title_min=70, title_max=120, kw_min=30, kw_max=40):
     """
     Process a single asset: load images, call AI, update database.
     
@@ -663,6 +754,10 @@ def process_single_asset(asset, provider_name, model, api_key, on_log=None, cust
         custom_prompt: Custom keywords that must appear in title and keywords
         platform: "adobestock", "shutterstock", "freepik", or "vecteezy"
         ai_generated: For Freepik, whether AI Generated checkbox is on
+        title_min: Minimum title character count
+        title_max: Maximum title character count
+        kw_min: Minimum keyword count
+        kw_max: Maximum keyword count
     
     Returns:
         dict with title, keywords, category or None on error
@@ -684,7 +779,8 @@ def process_single_asset(asset, provider_name, model, api_key, on_log=None, cust
 
         # Call AI
         result = generate_metadata(provider_name, model, api_key, images, filename, file_type,
-                                   custom_prompt=custom_prompt, platform=platform, ai_generated=ai_generated)
+                                   custom_prompt=custom_prompt, platform=platform, ai_generated=ai_generated,
+                                   title_min=title_min, title_max=title_max, kw_min=kw_min, kw_max=kw_max)
 
         # Update database
         db.update_metadata(asset_id, result["title"], result["keywords"], result["category"])
@@ -701,7 +797,7 @@ def process_single_asset(asset, provider_name, model, api_key, on_log=None, cust
         return None
 
 
-def process_all_assets(assets, provider_name, model, api_key, stop_event, on_log=None, on_progress=None, on_asset_done=None, custom_prompt="", platform="adobestock", ai_generated=False):
+def process_all_assets(assets, provider_name, model, api_key, stop_event, on_log=None, on_progress=None, on_asset_done=None, custom_prompt="", platform="adobestock", ai_generated=False, title_min=70, title_max=120, kw_min=30, kw_max=40):
     """
     Process all assets sequentially with stop support.
     
@@ -717,6 +813,10 @@ def process_all_assets(assets, provider_name, model, api_key, stop_event, on_log
         custom_prompt: Custom keywords that must appear in title and keywords
         platform: "adobestock", "shutterstock", "freepik", or "vecteezy"
         ai_generated: For Freepik, whether AI Generated checkbox is on
+        title_min: Minimum title character count
+        title_max: Maximum title character count
+        kw_min: Minimum keyword count
+        kw_max: Maximum keyword count
     """
     total = len(assets)
     
@@ -733,7 +833,8 @@ def process_all_assets(assets, provider_name, model, api_key, stop_event, on_log
             on_progress(i + 1, total)
 
         result = process_single_asset(asset, provider_name, model, api_key, on_log,
-                                      custom_prompt=custom_prompt, platform=platform, ai_generated=ai_generated)
+                                      custom_prompt=custom_prompt, platform=platform, ai_generated=ai_generated,
+                                      title_min=title_min, title_max=title_max, kw_min=kw_min, kw_max=kw_max)
 
         if on_asset_done:
             on_asset_done(asset["id"], result)

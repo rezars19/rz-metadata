@@ -49,7 +49,7 @@ class NavigationMixin:
 
         # ── Bulk Rename button ──
         self.nav_rename_btn = ctk.CTkButton(
-            nav_items, text="✏️", width=56, height=56, corner_radius=12,
+            nav_items, text="📝", width=56, height=56, corner_radius=12,
             font=ctk.CTkFont(size=24),
             fg_color=COLORS["bg_card"],
             hover_color=COLORS["bg_card_hover"],

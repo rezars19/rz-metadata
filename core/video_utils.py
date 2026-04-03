@@ -9,13 +9,14 @@ from PIL import Image
 import numpy as np
 
 
-def extract_frames(video_path, num_frames=5):
+def extract_frames(video_path, num_frames=None, max_frames=15):
     """
-    Extract evenly spaced frames from a video file.
+    Extract frames from a video file — 1 frame per second.
     
     Args:
         video_path: Path to the video file (MP4, MOV)
-        num_frames: Number of frames to extract (default: 5)
+        num_frames: Override number of frames (if None, uses 1 per second)
+        max_frames: Maximum frames to extract (default: 10)
     
     Returns:
         List of PIL.Image objects
@@ -25,22 +26,41 @@ def extract_frames(video_path, num_frames=5):
         raise ValueError(f"Cannot open video file: {video_path}")
     
     total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+    fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
+    duration_sec = total_frames / fps
+    
     if total_frames <= 0:
         cap.release()
         raise ValueError(f"Video has no frames: {video_path}")
     
-    # Calculate evenly spaced frame indices
-    if total_frames < num_frames:
-        frame_indices = list(range(total_frames))
+    if num_frames is not None:
+        # Legacy: fixed number of evenly spaced frames
+        count = min(num_frames, total_frames)
+        frame_indices = [int(i * (total_frames - 1) / max(count - 1, 1)) for i in range(count)]
     else:
-        frame_indices = [int(i * (total_frames - 1) / (num_frames - 1)) for i in range(num_frames)]
+        # 1 frame per second, capped at max_frames
+        duration_int = max(1, int(duration_sec))
+        if duration_int <= max_frames:
+            # Short video: 1 frame per second
+            count = duration_int
+            frame_indices = []
+            for sec in range(count):
+                frame_idx = int(sec * fps)
+                frame_indices.append(min(frame_idx, total_frames - 1))
+        else:
+            # Long video: spread max_frames evenly across full duration
+            count = max_frames
+            frame_indices = []
+            for i in range(count):
+                sec = i * duration_sec / count
+                frame_idx = int(sec * fps)
+                frame_indices.append(min(frame_idx, total_frames - 1))
     
     frames = []
     for idx in frame_indices:
         cap.set(cv2.CAP_PROP_POS_FRAMES, idx)
         ret, frame = cap.read()
         if ret:
-            # Convert BGR to RGB
             frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
             pil_image = Image.fromarray(frame_rgb)
             frames.append(pil_image)

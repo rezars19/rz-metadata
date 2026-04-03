@@ -17,12 +17,37 @@ from ui.theme import COLORS
 from core.metadata_processor import get_file_type, process_all_assets
 from core.csv_exporter import export_csv
 
-# Notification sound (Windows built-in)
-try:
-    import winsound
-    HAS_SOUND = True
-except ImportError:
-    HAS_SOUND = False
+def _safe_int(var, default):
+    """Safely get int from a StringVar, return default on failure."""
+    try:
+        v = var.get().strip()
+        return int(v) if v else default
+    except (ValueError, AttributeError):
+        return default
+
+# Notification sound (cross-platform)
+import sys as _sys
+
+def _play_notification_sound(success=True):
+    """Play a platform-appropriate notification sound."""
+    try:
+        if _sys.platform == "win32":
+            import winsound
+            if success:
+                winsound.PlaySound("SystemAsterisk", winsound.SND_ALIAS | winsound.SND_ASYNC)
+            else:
+                winsound.PlaySound("SystemExclamation", winsound.SND_ALIAS | winsound.SND_ASYNC)
+        elif _sys.platform == "darwin":
+            import subprocess
+            # macOS: use built-in system sounds
+            sound_name = "Glass" if success else "Basso"
+            sound_path = f"/System/Library/Sounds/{sound_name}.aiff"
+            subprocess.Popen(
+                ["afplay", sound_path],
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+            )
+    except Exception:
+        pass
 
 
 class ActionsMixin:
@@ -214,14 +239,20 @@ class ActionsMixin:
         self._log(f"   Assets to process: {len(assets)}")
         self._log("─" * 50)
 
+        # Get title and keyword range settings
+        title_min = _safe_int(self.title_min_var, 70)
+        title_max = _safe_int(self.title_max_var, 120)
+        kw_min = _safe_int(self.kw_min_var, 30)
+        kw_max = _safe_int(self.kw_max_var, 40)
+
         self.generation_thread = threading.Thread(
             target=self._generation_worker,
-            args=(assets, provider, model, api_key, custom_prompt, self.current_platform, ai_generated),
+            args=(assets, provider, model, api_key, custom_prompt, self.current_platform, ai_generated, title_min, title_max, kw_min, kw_max),
             daemon=True
         )
         self.generation_thread.start()
 
-    def _generation_worker(self, assets, provider, model, api_key, custom_prompt="", platform="adobestock", ai_generated=False):
+    def _generation_worker(self, assets, provider, model, api_key, custom_prompt="", platform="adobestock", ai_generated=False, title_min=70, title_max=120, kw_min=30, kw_max=40):
         total_assets = len(assets)
         success_count = [0]
         error_count = [0]
@@ -249,7 +280,8 @@ class ActionsMixin:
         was_stopped = False
         process_all_assets(assets, provider, model, api_key,
                            self.stop_event, on_log, on_progress, on_asset_done,
-                           custom_prompt=custom_prompt, platform=platform, ai_generated=ai_generated)
+                           custom_prompt=custom_prompt, platform=platform, ai_generated=ai_generated,
+                           title_min=title_min, title_max=title_max, kw_min=kw_min, kw_max=kw_max)
         was_stopped = self.stop_event.is_set()
         self.after(0, lambda: self._reset_generate_button(
             total_assets, success_count[0], error_count[0], was_stopped
@@ -258,6 +290,99 @@ class ActionsMixin:
     def _stop_generation(self):
         self.stop_event.set()
         self._log("⏹ Stopping generation...")
+
+    # ─── Generate Single Asset (right-click) ──────────────────────────────────────
+
+    def _generate_single_asset(self, asset_id):
+        """Generate metadata for a single asset (invoked from right-click menu)."""
+        if self.is_generating:
+            messagebox.showwarning("Busy", "Another generation is in progress.\nStop it first.")
+            return
+
+        # Validate settings
+        provider = self.provider_var.get()
+        api_key = self.api_keys.get(provider, "")
+        if not api_key:
+            api_key = self.api_key_entry.get().strip()
+        if not api_key:
+            messagebox.showwarning("API Key Required", "Please enter your API key in Settings.")
+            return
+
+        model = self.model_var.get()
+        if not model:
+            messagebox.showwarning("Model Required", "Please select a model in Settings.")
+            return
+
+        custom_prompt = self.custom_prompt_entry.get("1.0", "end-1c").strip()
+
+        ai_generated = False
+        if self.current_platform == "freepik" and self.freepik_ai_var.get():
+            ai_generated = True
+            if not self.freepik_model_var.get():
+                messagebox.showwarning("Model Required", "Select a Freepik AI model.")
+                return
+
+        # Get asset from DB
+        asset = db.get_asset_by_id(asset_id)
+        if not asset:
+            self._log(f"❌ Asset not found in database (id={asset_id})")
+            return
+
+        # Reset status to pending so it can be re-processed
+        db.update_status(asset_id, "pending")
+        asset["status"] = "pending"
+
+        # Save settings
+        self._save_settings()
+
+        card = self.asset_cards.get(asset_id, {})
+        filename = card.get("filename", asset["filename"])
+
+        self.is_generating = True
+        self.generate_btn.configure(text="⏹  Stop", fg_color=COLORS["stop_red"], hover_color="#cc1133")
+
+        self._log("─" * 50)
+        self._log(f"🚀 Generating metadata for: {filename}")
+        self._log(f"   Provider: {provider} | Model: {model}")
+        self._log("─" * 50)
+
+        def _worker():
+            from core.metadata_processor import process_single_asset
+
+            def on_log(msg):
+                self.after(0, self._log, msg)
+
+            result = process_single_asset(
+                asset, provider, model, api_key, on_log,
+                custom_prompt=custom_prompt, platform=self.current_platform,
+                ai_generated=ai_generated,
+                title_min=_safe_int(self.title_min_var, 70), title_max=_safe_int(self.title_max_var, 120),
+                kw_min=_safe_int(self.kw_min_var, 30), kw_max=_safe_int(self.kw_max_var, 40)
+            )
+
+            def _on_done():
+                if result:
+                    _t = result["title"]
+                    _k = result["keywords"]
+                    _c = result.get("category", "")
+                    _p = result.get("prompt", "")
+                    self._update_asset_card(asset_id, _t, _k, _c, _p)
+                    self._log(f"✅ Single asset done: {filename}")
+                    self._show_toast(f"✅ {filename} metadata generated!")
+                else:
+                    self._log(f"❌ Failed: {filename}")
+
+                self._update_counter()
+                self._update_csv_button_state()
+                self.is_generating = False
+                self.generate_btn.configure(
+                    text="🚀  Generate All",
+                    fg_color=COLORS["accent_blue"], hover_color=COLORS["neon_blue"]
+                )
+
+            self.after(0, _on_done)
+
+        threading.Thread(target=_worker, daemon=True).start()
 
     def _reset_generate_button(self, total=0, success=0, errors=0, was_stopped=False):
         self.is_generating = False
@@ -272,16 +397,7 @@ class ActionsMixin:
     def _show_generation_complete_popup(self, total, success, errors, was_stopped):
         """Show a centered popup when metadata generation is complete."""
         # ── Play notification sound ──
-        if HAS_SOUND:
-            try:
-                if errors == 0 and not was_stopped:
-                    # Success: play a pleasant "asterisk" chime
-                    winsound.PlaySound("SystemAsterisk", winsound.SND_ALIAS | winsound.SND_ASYNC)
-                else:
-                    # Partial/error/stopped: play "exclamation" alert
-                    winsound.PlaySound("SystemExclamation", winsound.SND_ALIAS | winsound.SND_ASYNC)
-            except Exception:
-                pass
+        _play_notification_sound(success=(errors == 0 and not was_stopped))
 
         popup = ctk.CTkToplevel(self)
         popup.title("Generation Complete")

@@ -73,10 +73,26 @@ class RZAutometadata(
                 base_path = getattr(sys, '_MEIPASS', os.path.dirname(sys.executable))
             else:
                 base_path = os.path.dirname(os.path.abspath(__file__))
-            icon_path = os.path.join(base_path, "icon.ico")
-            if os.path.exists(icon_path):
-                self.iconbitmap(icon_path)
-                self.after(200, lambda: self.iconbitmap(icon_path))
+
+            if sys.platform == "darwin":
+                # macOS: use .icns or .png for icon
+                icon_path = os.path.join(base_path, "icon.icns")
+                if not os.path.exists(icon_path):
+                    icon_path = os.path.join(base_path, "icon.png")
+                if os.path.exists(icon_path):
+                    try:
+                        icon_img = Image.open(icon_path)
+                        icon_photo = ImageTk.PhotoImage(icon_img.resize((64, 64), Image.LANCZOS))
+                        self.iconphoto(True, icon_photo)
+                        self._icon_ref = icon_photo  # Keep reference to prevent GC
+                    except Exception:
+                        pass
+            else:
+                # Windows: use .ico
+                icon_path = os.path.join(base_path, "icon.ico")
+                if os.path.exists(icon_path):
+                    self.iconbitmap(icon_path)
+                    self.after(200, lambda: self.iconbitmap(icon_path))
         except Exception:
             pass
 
@@ -93,6 +109,12 @@ class RZAutometadata(
         self.log_visible = True
         self.api_keys = {}  # Per-provider API key storage: {provider_name: key}
         self.current_platform = "adobestock"  # "adobestock", "shutterstock", "freepik", or "vecteezy"
+
+        # Title & keyword range settings (updated per platform)
+        self.title_min_var = ctk.StringVar(value="70")
+        self.title_max_var = ctk.StringVar(value="120")
+        self.kw_min_var = ctk.StringVar(value="30")
+        self.kw_max_var = ctk.StringVar(value="40")
 
         # ─── Clear stale assets from previous session ────────────────────
         db.clear_all()
@@ -119,6 +141,15 @@ class RZAutometadata(
         saved_model = db.get_setting("model", "")
         saved_custom_prompt = db.get_setting("custom_prompt", "")
 
+        # Migrate old "Maia Router" settings to "RZ Vision"
+        old_maia_key = db.get_setting("api_key_Maia Router", "")
+        if old_maia_key:
+            db.save_setting("api_key_RZ Vision", old_maia_key)
+            db.save_setting("api_key_Maia Router", "")  # Clear old key
+        if saved_provider == "Maia Router":
+            saved_provider = "RZ Vision"
+            db.save_setting("provider", "RZ Vision")
+
         # Load ALL per-provider API keys first (before any UI changes)
         for pname in get_provider_names():
             key = db.get_setting(f"api_key_{pname}", "")
@@ -132,6 +163,10 @@ class RZAutometadata(
             models = get_models_for_provider(saved_provider)
             if self.model_dropdown:
                 self.model_dropdown.configure(values=models)
+            # Migrate old model ID to display name if needed
+            from core.ai_providers import _MODEL_DISPLAY_NAMES
+            if saved_model in _MODEL_DISPLAY_NAMES:
+                saved_model = _MODEL_DISPLAY_NAMES[saved_model]
             if saved_model and saved_model in models:
                 self.model_var.set(saved_model)
             elif models:
@@ -150,6 +185,20 @@ class RZAutometadata(
         if saved_custom_prompt:
             self.custom_prompt_entry.insert("1.0", saved_custom_prompt)
 
+        # Load title & keyword range settings (per platform)
+        platform = self.current_platform
+        platform_defaults = {
+            "adobestock": (70, 120, 30, 40),
+            "shutterstock": (120, 200, 30, 40),
+            "freepik": (70, 100, 30, 40),
+            "vecteezy": (150, 200, 30, 40)
+        }
+        defs = platform_defaults.get(platform, (70, 120, 30, 40))
+        self.title_min_var.set(db.get_setting(f"title_min_{platform}", str(defs[0])))
+        self.title_max_var.set(db.get_setting(f"title_max_{platform}", str(defs[1])))
+        self.kw_min_var.set(db.get_setting(f"kw_min_{platform}", str(defs[2])))
+        self.kw_max_var.set(db.get_setting(f"kw_max_{platform}", str(defs[3])))
+
     def _save_settings(self):
         """Save current provider, model, per-provider API keys, and custom prompt to database."""
         current_provider = self.provider_var.get()
@@ -165,6 +214,13 @@ class RZAutometadata(
 
         custom_prompt = self.custom_prompt_entry.get("1.0", "end-1c").strip()
         db.save_setting("custom_prompt", custom_prompt)
+
+        # Save title & keyword range settings (per platform)
+        platform = self.current_platform
+        db.save_setting(f"title_min_{platform}", str(self.title_min_var.get()))
+        db.save_setting(f"title_max_{platform}", str(self.title_max_var.get()))
+        db.save_setting(f"kw_min_{platform}", str(self.kw_min_var.get()))
+        db.save_setting(f"kw_max_{platform}", str(self.kw_max_var.get()))
 
     def _on_close(self):
         """Handle window close — save settings then exit."""

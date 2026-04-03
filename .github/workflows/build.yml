@@ -1,0 +1,150 @@
+# ============================================================
+# RZ Autometadata - CI/CD Build Workflow
+# ============================================================
+# Triggers on version tags (e.g. v1.0.3)
+# Builds for Windows and macOS in parallel
+# Creates a GitHub Release with both installers
+# ============================================================
+
+name: Build & Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  # ─────────────────────────────────────────────────────────────
+  # Windows Build
+  # ─────────────────────────────────────────────────────────────
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pyinstaller
+
+      - name: Build EXE
+        run: python build.py
+
+      - name: Get version from tag
+        id: version
+        shell: bash
+        run: echo "VERSION=${GITHUB_REF_NAME#v}" >> $GITHUB_OUTPUT
+
+      - name: Build Installer (Inno Setup)
+        run: |
+          # Download and install Inno Setup
+          choco install innosetup --yes --no-progress
+          # Compile installer
+          & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" installer.iss
+        shell: pwsh
+
+      - name: Upload Windows artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-build
+          path: |
+            dist/RZ Autometadata.exe
+            Output/RZ_Autometadata_Setup_*.exe
+
+  # ─────────────────────────────────────────────────────────────
+  # macOS Build
+  # ─────────────────────────────────────────────────────────────
+  build-macos:
+    runs-on: macos-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pyinstaller
+
+      - name: Create macOS icon
+        run: |
+          # Convert icon.ico to icon.icns using sips (macOS built-in)
+          # First extract a PNG from the logo, then create iconset
+          mkdir -p icon.iconset
+          sips -s format png logo.png --out icon.iconset/icon_512x512.png --resampleWidth 512
+          sips -s format png logo.png --out icon.iconset/icon_256x256.png --resampleWidth 256
+          sips -s format png logo.png --out icon.iconset/icon_128x128.png --resampleWidth 128
+          sips -s format png logo.png --out icon.iconset/icon_64x64.png --resampleWidth 64
+          sips -s format png logo.png --out icon.iconset/icon_32x32.png --resampleWidth 32
+          sips -s format png logo.png --out icon.iconset/icon_16x16.png --resampleWidth 16
+          # Create @2x variants
+          sips -s format png logo.png --out icon.iconset/icon_512x512@2x.png --resampleWidth 1024
+          sips -s format png logo.png --out icon.iconset/icon_256x256@2x.png --resampleWidth 512
+          sips -s format png logo.png --out icon.iconset/icon_128x128@2x.png --resampleWidth 256
+          sips -s format png logo.png --out icon.iconset/icon_32x32@2x.png --resampleWidth 64
+          sips -s format png logo.png --out icon.iconset/icon_16x16@2x.png --resampleWidth 32
+          # Convert to .icns
+          iconutil -c icns icon.iconset -o icon.icns
+
+      - name: Build macOS App
+        run: python build.py
+
+      - name: Upload macOS artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-build
+          path: dist/RZ_Autometadata_*_macOS.dmg
+
+  # ─────────────────────────────────────────────────────────────
+  # Create GitHub Release
+  # ─────────────────────────────────────────────────────────────
+  release:
+    needs: [build-windows, build-macos]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download Windows artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: windows-build
+          path: windows-build/
+
+      - name: Download macOS artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: macos-build
+          path: macos-build/
+
+      - name: List build artifacts
+        run: |
+          echo "=== Windows ==="
+          find windows-build/ -type f
+          echo "=== macOS ==="
+          find macos-build/ -type f
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: "RZ Autometadata ${{ github.ref_name }}"
+          draft: false
+          prerelease: false
+          generate_release_notes: true
+          files: |
+            windows-build/Output/RZ_Autometadata_Setup_*.exe
+            windows-build/dist/RZ Autometadata.exe
+            macos-build/RZ_Autometadata_*_macOS.dmg
