@@ -376,20 +376,29 @@ def _create_placeholder(file_path, size, label):
     return img
 
 
-def load_images_for_ai(file_path, file_type):
+def load_images_for_ai(file_path, file_type, provider_name=""):
     """
     Load image(s) for AI analysis.
     
     For images: returns list with one image
     For PSD: composites all layers, returns one image
     For vectors: tries to rasterize SVG/EPS, falls back to descriptive placeholder
-    For videos: returns 1 frame per second (max 15)
+    For videos: returns 1 frame per second (max depends on provider)
+      - Groq: max 5 frames (API limitation)
+      - RZ Vision / others: max 15 frames
+    
+    Args:
+        file_path: Path to the file
+        file_type: "image", "vector", or "video"
+        provider_name: AI provider name ("Groq", "RZ Vision", etc.)
     
     Returns:
         List of PIL.Image objects
     """
     if file_type == "video":
-        frames = extract_frames(file_path)
+        # Groq API doesn't support more than 5 frames per request
+        max_frames = 5 if provider_name == "Groq" else 15
+        frames = extract_frames(file_path, max_frames=max_frames)
         # Resize frames for API (max 1024px on longest side)
         resized = []
         for f in frames:
@@ -771,8 +780,8 @@ def process_single_asset(asset, provider_name, model, api_key, on_log=None, cust
         if on_log:
             on_log(f"Loading {file_type}: {filename}...")
 
-        # Load images for AI
-        images = load_images_for_ai(file_path, file_type)
+        # Load images for AI (Groq limited to 5 frames, RZ Vision up to 15)
+        images = load_images_for_ai(file_path, file_type, provider_name=provider_name)
 
         if on_log:
             on_log(f"Sending to {provider_name} ({model})...")

@@ -17,7 +17,7 @@
 
 ; ── App Metadata ─────────────────────────────────────────────
 #define MyAppName "RZ Autometadata"
-#define MyAppVersion "1.0.2"
+#define MyAppVersion "1.0.3"
 #define MyAppPublisher "RZ Autometadata"
 #define MyAppURL "https://github.com/rezars19/rz-metadata"
 #define MyAppExeName "RZ Autometadata.exe"

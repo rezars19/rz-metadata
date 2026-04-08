@@ -14,7 +14,7 @@ import subprocess
 logger = logging.getLogger(__name__)
 
 # App version — update setiap kali build baru
-CURRENT_VERSION = "1.0.2"
+CURRENT_VERSION = "1.0.3"
 
 # GitHub repository info (CHANGE THIS to your actual repo)
 GITHUB_REPO = "rezars19/rz-metadata"
